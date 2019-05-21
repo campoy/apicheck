@@ -1,4 +1,4 @@
-package apicheck
+package compare
 
 import (
 	"fmt"
@@ -12,70 +12,14 @@ import (
 	"github.com/pkg/errors"
 )
 
-// A Change is the basic abstraction of all changes, backwards compatible or not.
-type Change interface {
-	String() string
-	Compatible() bool
-}
-
-type packageChange struct {
-	path  string
-	added bool
-}
-
-func (c packageChange) String() string {
-	if c.added {
-		return fmt.Sprintf("package %q added", c.path)
-	}
-	return fmt.Sprintf("package %q removed", c.path)
-}
-
-func (c packageChange) Compatible() bool { return c.added }
-
-func compare(base, target *API) ([]Change, error) {
-	pathsMap := make(map[string]bool)
-	for path := range base.Packages {
-		pathsMap[path] = true
-	}
-	for path := range target.Packages {
-		pathsMap[path] = true
-	}
-	paths := make([]string, 0, len(pathsMap))
-	for path := range pathsMap {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-
-	var changes []Change
-
-	for _, path := range paths {
-		if _, ok := base.Packages[path]; !ok {
-			changes = append(changes, packageChange{path, true})
-			continue
-		}
-		if _, ok := target.Packages[path]; !ok {
-			changes = append(changes, packageChange{path, false})
-			continue
-		}
-
-		// the package appears in both sides
-		cs, err := comparePkgs(path, base.Packages[path], target.Packages[path])
-		if err != nil {
-			return nil, errors.Wrapf(err, "could not compare %s", path)
-		}
-		changes = append(changes, cs...)
-	}
-
-	return changes, nil
-}
-
-type declChange struct {
+// DeclChange tracks the addition or removal of an identifier declaration in a package.
+type DeclChange struct {
 	path  string
 	name  string
 	added bool
 }
 
-func (c declChange) String() string {
+func (c DeclChange) String() string {
 	name := c.path + "." + c.name
 	if c.added {
 		return fmt.Sprintf("identifier %q added", name)
@@ -83,9 +27,11 @@ func (c declChange) String() string {
 	return fmt.Sprintf("identifier %q removed", name)
 }
 
-func (c declChange) Compatible() bool { return c.added }
+// Compatible returns true when the change is backwards compatible.
+func (c DeclChange) Compatible() bool { return c.added }
 
-func comparePkgs(importPath string, base, target *ast.Package) ([]Change, error) {
+// Packages compares two packages and returns the list of changes in its identifiers.
+func Packages(importPath string, base, target *ast.Package) ([]Change, error) {
 	baseDecls := declsByName(base)
 	targetDecls := declsByName(target)
 
@@ -106,15 +52,15 @@ func comparePkgs(importPath string, base, target *ast.Package) ([]Change, error)
 
 	for _, name := range names {
 		if _, ok := baseDecls[name]; !ok {
-			changes = append(changes, declChange{importPath, name, true})
+			changes = append(changes, DeclChange{importPath, name, true})
 			continue
 		}
 		if _, ok := targetDecls[name]; !ok {
-			changes = append(changes, declChange{importPath, name, false})
+			changes = append(changes, DeclChange{importPath, name, false})
 			continue
 		}
 
-		cs, err := compareDecls(baseDecls[name], targetDecls[name])
+		cs, err := Decls(baseDecls[name], targetDecls[name])
 		if err != nil {
 			return nil, errors.Wrapf(err, "could not compare decls for %s", name)
 		}
@@ -142,7 +88,7 @@ func declsByName(pkg *ast.Package) map[string]interface{} {
 			key = recv + "." + name
 		}
 		if _, ok := decls[key]; ok {
-			log.Printf("found %s declared twice in %s", key, pkg.Name)
+			log.Printf("found multiple declarations of %s in %s", key, pkg.Name)
 		}
 		decls[key] = decl
 	}
@@ -188,8 +134,4 @@ func declsByName(pkg *ast.Package) map[string]interface{} {
 		}
 	}
 	return decls
-}
-
-func compareDecls(target, base interface{}) ([]Change, error) {
-	return nil, nil
 }

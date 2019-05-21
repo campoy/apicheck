@@ -1,4 +1,4 @@
-package apicheck
+package parser
 
 import (
 	"bytes"
@@ -17,43 +17,32 @@ import (
 	"gopkg.in/src-d/go-git.v4/plumbing"
 )
 
-// BackwardsCompatible checks whether version target of pkg is backwards
-// compatible with the given base version.
-// It returns a list of backwards incompatible changes otherwise.
-func BackwardsCompatible(repo, base, target string) ([]Change, error) {
-	baseAPI, err := FetchAPI(repo, base)
-	if err != nil {
-		return nil, errors.Wrapf(err, "could not load API for %s version %s", repo, base)
-	}
-
-	targetAPI, err := FetchAPI(repo, target)
-	if err != nil {
-		return nil, errors.Wrapf(err, "could not load API for %s version %s", repo, target)
-	}
-
-	return compare(baseAPI, targetAPI)
-}
-
-// API contains the result of parsing a whole repository.
-type API struct {
+// Repo contains the result of parsing a whole repository.
+type Repo struct {
 	Packages map[string]*ast.Package
 }
 
-// FetchAPI fetches the given repository at the specified tag, parses its contents,
-// and returns the corresponding API.
-func FetchAPI(repo, tag string) (*API, error) {
-	dir, err := gitClone(repo, tag)
-	// defer os.RemoveAll(dir)
+// CloneAndParse clones the a repo into a temporary directory,
+// checks out the given tag, and parses its contents.
+// The temporary directory is removed automatically.
+func CloneAndParse(repo, tag string) (*Repo, error) {
+	dir, err := CloneRepo(repo, tag)
 	if err != nil {
 		return nil, err
 	}
+	defer os.RemoveAll(dir)
+	return ParseRepo(dir)
+}
 
-	paths, err := goList(dir)
+// ParseRepo fetches the given repository at the specified tag, parses its contents,
+// and returns the corresponding Repo.
+func ParseRepo(dir string) (*Repo, error) {
+	paths, err := ListPackages(dir)
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not list packages in %s", dir)
 	}
 
-	api := &API{Packages: make(map[string]*ast.Package)}
+	api := &Repo{Packages: make(map[string]*ast.Package)}
 
 	base := paths[0]
 	for _, path := range paths {
@@ -86,7 +75,10 @@ func FetchAPI(repo, tag string) (*API, error) {
 	return api, nil
 }
 
-func gitClone(repo, tag string) (string, error) {
+// CloneRepo clones the given git repository and checks out the given tag
+// into a temporary directory whose path is returned.
+// The caller is reponsible for deleting the temp directory if needed.
+func CloneRepo(repo, tag string) (string, error) {
 	path, err := ioutil.TempDir("", "")
 	if err != nil {
 		return "", errors.Wrapf(err, "could not create temp directory")
@@ -113,7 +105,8 @@ func gitClone(repo, tag string) (string, error) {
 	return path, nil
 }
 
-func goList(path string) ([]string, error) {
+// ListPackages returns the list of Go packages under the given directory.
+func ListPackages(path string) ([]string, error) {
 	stdout, stderr := new(bytes.Buffer), new(bytes.Buffer)
 
 	cmd := exec.Command("go", "list", "./...")

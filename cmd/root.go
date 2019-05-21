@@ -19,7 +19,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/campoy/apicheck/apicheck"
+	"github.com/campoy/apicheck/apicheck/compare"
+	"github.com/campoy/apicheck/apicheck/parser"
 	"github.com/spf13/cobra"
 )
 
@@ -40,21 +41,40 @@ var rootCmd = &cobra.Command{
 	},
 
 	Run: func(cmd *cobra.Command, args []string) {
-		changes, err := apicheck.BackwardsCompatible(
+		err := cloneAndCompare(
 			cmd.Flag("pkg").Value.String(),
 			cmd.Flag("base").Value.String(),
 			cmd.Flag("target").Value.String(),
 		)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			return
-		}
-		for _, change := range changes {
-			if !change.Compatible() {
-				fmt.Println(change)
-			}
+			os.Exit(1)
 		}
 	},
+}
+
+func cloneAndCompare(pkg, base, target string) error {
+	baseRepo, err := parser.CloneAndParse(pkg, base)
+	if err != nil {
+		return err
+	}
+
+	targetRepo, err := parser.CloneAndParse(pkg, target)
+	if err != nil {
+		return err
+	}
+
+	changes, err := compare.Repos(baseRepo, targetRepo)
+	if err != nil {
+		return err
+	}
+
+	for _, change := range changes {
+		if !change.Compatible() {
+			fmt.Println(change)
+		}
+	}
+	return nil
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
