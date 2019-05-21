@@ -60,7 +60,7 @@ func Packages(importPath string, base, target *ast.Package) ([]Change, error) {
 			continue
 		}
 
-		cs, err := Decls(baseDecls[name], targetDecls[name])
+		cs, err := Decls(name, baseDecls[name], targetDecls[name])
 		if err != nil {
 			return nil, errors.Wrapf(err, "could not compare decls for %s", name)
 		}
@@ -75,6 +75,8 @@ func isUnexported(name string) bool {
 	r, _ := utf8.DecodeRuneInString(name)
 	return r == '_' || unicode.IsLower(r)
 }
+
+type valueAndType struct{ value, typ ast.Expr }
 
 func declsByName(pkg *ast.Package) map[string]interface{} {
 	decls := make(map[string]interface{})
@@ -117,8 +119,14 @@ func declsByName(pkg *ast.Package) map[string]interface{} {
 					switch d.Tok {
 					case token.CONST, token.VAR:
 						vs := s.(*ast.ValueSpec)
-						for _, name := range vs.Names {
-							addDecl("", name.Name, vs.Type)
+						if len(vs.Values) == 0 {
+							for _, name := range vs.Names {
+								addDecl("", name.Name, vs.Type)
+							}
+						} else {
+							for i, name := range vs.Names {
+								addDecl("", name.Name, &valueAndType{vs.Values[i], vs.Type})
+							}
 						}
 
 					case token.TYPE:
