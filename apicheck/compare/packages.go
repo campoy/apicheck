@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"go/types"
 	"log"
-	"sort"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/campoy/apicheck/apicheck/internal/util"
 	"github.com/pkg/errors"
+	"golang.org/x/tools/go/loader"
 )
 
 // DeclChange tracks the addition or removal of an identifier declaration in a package.
@@ -30,37 +32,38 @@ func (c DeclChange) String() string {
 // Compatible returns true when the change is backwards compatible.
 func (c DeclChange) Compatible() bool { return c.added }
 
-// Packages compares two packages and returns the list of changes in its identifiers.
-func Packages(importPath string, base, target *ast.Package) ([]Change, error) {
-	baseDecls := declsByName(base)
-	targetDecls := declsByName(target)
+func findObj(pkg *loader.PackageInfo, name string) types.Object {
+	for _, obj := range pkg.Defs {
+		if obj != nil && obj.Name() == name {
+			return obj
+		}
+	}
+	return nil
+}
 
-	declsMap := make(map[string]bool)
-	for name := range baseDecls {
-		declsMap[name] = true
-	}
-	for name := range targetDecls {
-		declsMap[name] = true
-	}
-	names := make([]string, 0, len(declsMap))
-	for name := range declsMap {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+// Packages compares two packages and returns the list of changes in its identifiers.
+func Packages(base, target *loader.PackageInfo) ([]Change, error) {
+	getName := func(v interface{}) string { return v.(*ast.Ident).Name }
+	isExported := func(v interface{}) bool { return v != nil && v.(types.Object).Exported() }
+	names := util.SortUnique(
+		util.KeysFromMap(base.Defs, getName, isExported),
+		util.KeysFromMap(target.Defs, getName, isExported))
 
 	var changes []Change
-
 	for _, name := range names {
-		if _, ok := baseDecls[name]; !ok {
-			changes = append(changes, DeclChange{importPath, name, true})
-			continue
-		}
-		if _, ok := targetDecls[name]; !ok {
-			changes = append(changes, DeclChange{importPath, name, false})
+		baseObj := findObj(base, name)
+		if baseObj == nil {
+			changes = append(changes, DeclChange{base.Pkg.Path(), name, true})
 			continue
 		}
 
-		cs, err := Decls(name, baseDecls[name], targetDecls[name])
+		targetObj := findObj(target, name)
+		if targetObj == nil {
+			changes = append(changes, DeclChange{target.Pkg.Path(), name, false})
+			continue
+		}
+
+		cs, err := Decls(name, baseObj, targetObj)
 		if err != nil {
 			return nil, errors.Wrapf(err, "could not compare decls for %s", name)
 		}

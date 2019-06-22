@@ -2,24 +2,23 @@ package parser
 
 import (
 	"bytes"
-	"go/ast"
-	"go/parser"
-	"go/token"
+	"go/types"
 	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/pkg/errors"
+	"golang.org/x/tools/go/loader"
 	"gopkg.in/src-d/go-git.v4"
 	"gopkg.in/src-d/go-git.v4/plumbing"
 )
 
 // Repo contains the result of parsing a whole repository.
 type Repo struct {
-	Packages map[string]*ast.Package
+	Base     string
+	Packages map[string]*loader.PackageInfo
 }
 
 // CloneAndParse clones the a repo into a temporary directory,
@@ -42,34 +41,27 @@ func ParseRepo(dir string) (*Repo, error) {
 		return nil, errors.Wrapf(err, "could not list packages in %s", dir)
 	}
 
-	api := &Repo{Packages: make(map[string]*ast.Package)}
-
-	base := paths[0]
+	api := &Repo{Base: paths[0], Packages: make(map[string]*loader.PackageInfo)}
+	conf := loader.Config{
+		AllowErrors:         true,
+		TypeChecker:         types.Config{Error: func(error) {}},
+		TypeCheckFuncBodies: func(path string) bool { return strings.HasPrefix(path, api.Base) },
+	}
 	for _, path := range paths {
-		fs := token.NewFileSet()
-		include := func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }
-		rel := filepath.Join(dir, strings.TrimPrefix(path, base))
-		pkgs, err := parser.ParseDir(fs, rel, include, 0)
-		if err != nil {
-			return nil, errors.Wrapf(err, "could not parse dir %s", dir)
-		}
+		conf.Import(path)
+	}
 
-		for name, pkg := range pkgs {
-			if strings.HasSuffix(name, "_test") {
-				continue
-			}
-			if _, ok := api.Packages[path]; ok {
-				var names []string
-				for name := range pkgs {
-					names = append(names, name)
-				}
-				log.Fatalf("found more than one non-test package in %s: %v", path, names)
-			}
-			api.Packages[path] = pkg
+	prog, err := conf.Load()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for _, path := range paths {
+		pkg := prog.Package(path)
+		if pkg == nil {
+			return nil, errors.Errorf("could not find %s path", err)
 		}
-		for _, pkg := range pkgs {
-			api.Packages[path] = pkg
-		}
+		api.Packages[strings.TrimPrefix(path, api.Base)] = pkg
 	}
 
 	return api, nil

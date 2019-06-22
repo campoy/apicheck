@@ -2,8 +2,8 @@ package compare
 
 import (
 	"fmt"
-	"sort"
 
+	"github.com/campoy/apicheck/apicheck/internal/util"
 	"github.com/campoy/apicheck/apicheck/parser"
 	"github.com/pkg/errors"
 )
@@ -31,21 +31,11 @@ func (c packageChange) Compatible() bool { return c.added }
 
 // Repos compares two given Repos.
 func Repos(base, target *parser.Repo) ([]Change, error) {
-	pathsMap := make(map[string]bool)
-	for path := range base.Packages {
-		pathsMap[path] = true
-	}
-	for path := range target.Packages {
-		pathsMap[path] = true
-	}
-	paths := make([]string, 0, len(pathsMap))
-	for path := range pathsMap {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
+	paths := util.SortUnique(
+		util.KeysFromMap(base.Packages, nil, nil),
+		util.KeysFromMap(target.Packages, nil, nil))
 
 	var changes []Change
-
 	for _, path := range paths {
 		if _, ok := base.Packages[path]; !ok {
 			changes = append(changes, packageChange{path, true})
@@ -57,7 +47,7 @@ func Repos(base, target *parser.Repo) ([]Change, error) {
 		}
 
 		// the package appears in both sides
-		cs, err := Packages(path, base.Packages[path], target.Packages[path])
+		cs, err := Packages(base.Packages[path], target.Packages[path])
 		if err != nil {
 			return nil, errors.Wrapf(err, "could not compare %s", path)
 		}
