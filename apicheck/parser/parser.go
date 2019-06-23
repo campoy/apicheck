@@ -1,16 +1,12 @@
 package parser
 
 import (
-	"bytes"
-	"go/types"
 	"io/ioutil"
-	"log"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/pkg/errors"
-	"golang.org/x/tools/go/loader"
+	"golang.org/x/tools/go/packages"
 	"gopkg.in/src-d/go-git.v4"
 	"gopkg.in/src-d/go-git.v4/plumbing"
 )
@@ -18,7 +14,7 @@ import (
 // Repo contains the result of parsing a whole repository.
 type Repo struct {
 	Base     string
-	Packages map[string]*loader.PackageInfo
+	Packages map[string]*packages.Package
 }
 
 // CloneAndParse clones the a repo into a temporary directory,
@@ -36,32 +32,25 @@ func CloneAndParse(repo, tag string) (*Repo, error) {
 // ParseRepo fetches the given repository at the specified tag, parses its contents,
 // and returns the corresponding Repo.
 func ParseRepo(dir string) (*Repo, error) {
-	paths, err := ListPackages(dir)
+	basePkg, err := packages.Load(&packages.Config{Dir: dir}, ".")
 	if err != nil {
-		return nil, errors.Wrapf(err, "could not list packages in %s", dir)
+		return nil, errors.Wrapf(err, "could not load base package")
+	}
+	api := &Repo{
+		Base:     basePkg[0].PkgPath,
+		Packages: make(map[string]*packages.Package),
 	}
 
-	api := &Repo{Base: paths[0], Packages: make(map[string]*loader.PackageInfo)}
-	conf := loader.Config{
-		AllowErrors:         true,
-		TypeChecker:         types.Config{Error: func(error) {}},
-		TypeCheckFuncBodies: func(path string) bool { return strings.HasPrefix(path, api.Base) },
-	}
-	for _, path := range paths {
-		conf.Import(path)
-	}
-
-	prog, err := conf.Load()
+	pkgs, err := packages.Load(&packages.Config{Dir: dir, Mode: packages.LoadSyntax}, "./...")
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
+	}
+	if len(pkgs) == 0 {
+		return nil, errors.Errorf("no packages found in %q", dir)
 	}
 
-	for _, path := range paths {
-		pkg := prog.Package(path)
-		if pkg == nil {
-			return nil, errors.Errorf("could not find %s path", err)
-		}
-		api.Packages[strings.TrimPrefix(path, api.Base)] = pkg
+	for _, pkg := range pkgs {
+		api.Packages[strings.TrimPrefix(pkg.PkgPath, api.Base)] = pkg
 	}
 
 	return api, nil
@@ -95,19 +84,4 @@ func CloneRepo(repo, tag string) (string, error) {
 		return "", errors.Wrapf(err, "could not checkout %s", tag)
 	}
 	return path, nil
-}
-
-// ListPackages returns the list of Go packages under the given directory.
-func ListPackages(path string) ([]string, error) {
-	stdout, stderr := new(bytes.Buffer), new(bytes.Buffer)
-
-	cmd := exec.Command("go", "list", "./...")
-	cmd.Dir = path
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	if err := cmd.Run(); err != nil {
-		return nil, errors.Wrapf(err, "could not list packages: %s", stderr)
-	}
-
-	return strings.Split(strings.TrimSpace(stdout.String()), "\n"), nil
 }
